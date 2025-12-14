@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realistic Dino Jump - Fast Fall Control</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto:wght@300;400&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Roboto', sans-serif;
+            user-select: none;
+        }
+
+        /* Game Canvas */
+        #gameCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(to bottom, #87CEEB 0%, #E0F7FA 100%);
+        }
+
+        /* Webcam HUD */
+        #webcam-container {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 160px;
+            height: 120px;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 3px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            background: #000;
+            z-index: 10;
+        }
+
+        #input_video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror the webcam */
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #333;
+            z-index: 5;
+        }
+
+        .score-box {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        /* Status Indicator for Gesture */
+        #gesture-status {
+            position: absolute;
+            bottom: 60px;
+            right: 190px;
+            color: white;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px 15px;
+            border-radius: 20px;
+            opacity: 0;
+            transition: all 0.1s;
+        }
+        #gesture-status.active {
+            opacity: 1;
+            background: rgba(46, 204, 113, 0.8);
+            transform: scale(1.1);
+        }
+        #gesture-status.down {
+            opacity: 1;
+            background: rgba(231, 76, 60, 0.8); /* Red for down */
+        }
+
+        /* Game Over / Start Screen */
+        #overlay-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 20;
+            transition: opacity 0.5s;
+        }
+
+        h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 3rem;
+            margin: 0 0 20px 0;
+            color: #ff4757;
+            text-align: center;
+        }
+
+        p {
+            font-size: 1.2rem;
+            margin-top: 10px;
+            text-align: center;
+            max-width: 600px;
+            line-height: 1.5;
+        }
+
+        #status-text {
+            font-weight: bold;
+            color: #2ed573;
+            margin-top: 20px;
+            font-size: 1.5rem;
+            animation: pulse 1.5s infinite;
+        }
+
+        button {
+            margin-top: 30px;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-family: 'Orbitron', sans-serif;
+            background: #2ed573;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 50px;
+            transition: transform 0.2s;
+            box-shadow: 0 0 15px rgba(46, 213, 115, 0.4);
+            display: none; 
+        }
+
+        button:hover {
+            transform: scale(1.05);
+            background: #26af61;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="webcam-container">
+        <video id="input_video"></video>
+    </div>
+
+    <div id="gesture-status">JUMP!</div>
+
+    <div id="ui-layer">
+        <div class="score-box">SCORE: <span id="score-val">0</span></div>
+    </div>
+
+    <div id="overlay-screen">
+        <h1 id="title-text">INITIALIZING...</h1>
+        <p>Allow camera access. <br> Raise finger to JUMP. Lower finger to DROP FAST.</p>
+        <div id="status-text">Loading AI Models...</div>
+        <button id="restart-btn" onclick="restartGame()">Try Again</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    /**
+     * CONFIGURATION & ASSETS
+     */
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    function resizeCanvas() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // CORS & Fallback Colors
+    //const DINO_SRC = "https://images.unsplash.com/photo-1559404245-00122e23d77d?w=200&h=200&fit=crop&auto=format&q=80"; 
+    const DINO_SRC = "dino.png";
+    const OBSTACLE_SRC = "https://images.unsplash.com/photo-1525857597365-5f6dbff2e36e?w=100&h=100&fit=crop&q=80";
+
+    const dinoImg = new Image(); 
+    //dinoImg.crossOrigin = "Anonymous"; 
+    dinoImg.src = DINO_SRC;
+
+    const obstacleImg = new Image(); 
+    obstacleImg.crossOrigin = "Anonymous"; 
+    obstacleImg.src = OBSTACLE_SRC;
+
+    /**
+     * GAME STATE
+     */
+    let gameRunning = false;
+    let isModelsLoaded = false;
+    let isFirstStart = true;
+    let score = 0;
+    let gameSpeed = 6;
+    let frame = 0;
+    
+    // Physics
+    const GRAVITY_NORMAL = 0.6;
+    const GRAVITY_FAST = 2.5; // New: Heavy gravity when finger is down
+    const JUMP_STRENGTH = -15;
+    const GROUND_HEIGHT = 100;
+
+    let currentGravity = GRAVITY_NORMAL; // Variable to track which gravity to apply
+    let isFingerUpGlobal = false; // Track gesture globally for the update loop
+
+    // Player
+    const player = {
+        x: 100,
+        y: canvas.height - GROUND_HEIGHT - 80,
+        width: 60,
+        height: 80,
+        dy: 0,
+        grounded: true
+    };
+
+    let obstacles = [];
+    let jumpCooldown = 0;
+    const JUMP_COOLDOWN_FRAMES = 15; 
+
+    /**
+     * UI ELEMENTS
+     */
+    const overlayScreen = document.getElementById('overlay-screen');
+    const titleText = document.getElementById('title-text');
+    const statusText = document.getElementById('status-text');
+    const restartBtn = document.getElementById('restart-btn');
+    const gestureStatus = document.getElementById('gesture-status');
+    const scoreVal = document.getElementById('score-val');
+
+    /**
+     * MEDIAPIPE HAND TRACKING
+     */
+    const videoElement = document.getElementById('input_video');
+
+    function onResults(results) {
+        if (!isModelsLoaded) {
+            isModelsLoaded = true;
+            statusText.innerText = "Show your hand to START!";
+            titleText.innerText = "READY?";
+        }
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            
+            if (isFirstStart) {
+                startGame();
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+            const indexTip = landmarks[8];
+            const indexPip = landmarks[6];
+
+            // Sensitivity: Tip must be higher than Knuckle
+            const threshold = 0.04; 
+            const isFingerUp = indexTip.y < (indexPip.y - threshold);
+
+            // Update Global State for the Game Loop
+            isFingerUpGlobal = isFingerUp;
+
+            if (isFingerUp) {
+                gestureStatus.innerText = "JUMP!";
+                gestureStatus.classList.add('active');
+                gestureStatus.classList.remove('down');
+                if (gameRunning) triggerJump();
+            } else {
+                // Visual feedback for dropping
+                gestureStatus.innerText = "DOWN";
+                gestureStatus.classList.remove('active');
+                gestureStatus.classList.add('down');
+            }
+        } else {
+            // No hand detected
+            isFingerUpGlobal = false;
+            gestureStatus.classList.remove('active');
+            gestureStatus.classList.remove('down');
+        }
+    }
+
+    const hands = new Hands({locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+    }});
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => {
+            await hands.send({image: videoElement});
+        },
+        width: 320,
+        height: 240
+    });
+    camera.start();
+
+    /**
+     * GAME FUNCTIONS
+     */
+    
+    function startGame() {
+        if (!isFirstStart) return; 
+        isFirstStart = false;
+        overlayScreen.style.display = 'none';
+        resetGameVars();
+        gameRunning = true;
+        requestAnimationFrame(gameLoop);
+    }
+
+    function restartGame() {
+        overlayScreen.style.display = 'none';
+        resetGameVars();
+        gameRunning = true;
+        requestAnimationFrame(gameLoop);
+    }
+
+    function resetGameVars() {
+        player.y = canvas.height - GROUND_HEIGHT - player.height;
+        player.dy = 0;
+        player.grounded = true;
+        obstacles = [];
+        score = 0;
+        gameSpeed = 6;
+        frame = 0;
+        scoreVal.innerText = score;
+        restartBtn.style.display = 'none';
+    }
+
+    function triggerJump() {
+        if (player.grounded && jumpCooldown === 0) {
+            player.dy = JUMP_STRENGTH;
+            player.grounded = false;
+            jumpCooldown = JUMP_COOLDOWN_FRAMES;
+        }
+    }
+
+    function spawnObstacle() {
+        const size = Math.random() * 30 + 50; 
+        obstacles.push({
+            x: canvas.width,
+            y: canvas.height - GROUND_HEIGHT - size,
+            width: size,
+            height: size,
+            passed: false
+        });
+    }
+
+    function gameOver() {
+        gameRunning = false;
+        overlayScreen.style.display = 'flex';
+        titleText.innerText = "GAME OVER";
+        statusText.innerText = "Score: " + score;
+        restartBtn.style.display = 'block';
+    }
+
+    function update() {
+        frame++;
+        if (jumpCooldown > 0) jumpCooldown--;
+
+        // --- NEW: FAST FALL LOGIC ---
+        // If the finger is NOT up (it is down), use Heavy Gravity
+        if (!isFingerUpGlobal && !player.grounded) {
+             currentGravity = GRAVITY_FAST;
+        } else {
+             currentGravity = GRAVITY_NORMAL;
+        }
+
+        // Apply Physics
+        player.dy += currentGravity;
+        player.y += player.dy;
+
+        const floorY = canvas.height - GROUND_HEIGHT - player.height;
+        if (player.y >= floorY) {
+            player.y = floorY;
+            player.dy = 0;
+            player.grounded = true;
+        }
+
+        // Spawning
+        const spawnRate = Math.max(60, Math.floor(1800 / (gameSpeed * 3)));
+        if (frame % spawnRate === 0) {
+            spawnObstacle();
+        }
+
+        // Obstacles Logic
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            let obs = obstacles[i];
+            obs.x -= gameSpeed;
+
+            // Collision (Hitbox)
+            if (
+                player.x < obs.x + obs.width - 15 &&
+                player.x + player.width > obs.x + 15 &&
+                player.y < obs.y + obs.height - 15 &&
+                player.y + player.height > obs.y + 15
+            ) {
+                gameOver();
+            }
+
+            // Score
+            if (obs.x + obs.width < player.x && !obs.passed) {
+                score++;
+                obs.passed = true;
+                scoreVal.innerText = score;
+                if(score % 5 === 0) gameSpeed += 0.5;
+            }
+
+            if (obs.x + obs.width < 0) obstacles.splice(i, 1);
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Ground
+        ctx.fillStyle = '#4B5320';
+        ctx.fillRect(0, canvas.height - GROUND_HEIGHT, canvas.width, GROUND_HEIGHT);
+
+        // Player
+        // Draw visual fallback box (Brown)
+       if (dinoImg.complete && dinoImg.naturalWidth > 0) {
+            ctx.drawImage(dinoImg, player.x, player.y, player.width+10, player.height+20);
+        }
+
+        // Obstacles
+        obstacles.forEach(obs => {
+            ctx.fillStyle = '#555'; 
+            ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+            try { ctx.drawImage(obstacleImg, obs.x, obs.y, obs.width, obs.height); } catch(e){}
+        });
+    }
+
+    function gameLoop() {
+        if (!gameRunning) return;
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+</script>
+</body>
+</html>
